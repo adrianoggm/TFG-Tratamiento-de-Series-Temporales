@@ -3,12 +3,14 @@ import math
 import numpy as np
 import matplotlib.pyplot as plt
 import activity_data as act
-import recurrence_plots as rec
+import calculate_ts_errors as err
 from pyts.image import GramianAngularField
 from scipy.sparse.csgraph import dijkstra
 from PIL import Image
 import cv2
 from sklearn.manifold import MDS
+from scipy.optimize import fsolve
+
 def normalize_to_zero_one(series):
     """
     Normaliza una serie temporal al rango [0, 1].
@@ -46,13 +48,13 @@ def normalize_series(series):
 
 def gramian_angular_field(series, method='summation'):
     # Normalización de la serie temporal
-    normalized_series = normalize_to_zero_one(series)
+    normalized_series = normalize_series(series)
     #print("SERIE_normalizada_R",normalized_series)
     # Conversión a ángulos
     # Polar encoding
     #print("Serie norm",series,normalized_series)
     phi = np.arccos(normalized_series) 
-    print("Serie norm",phi,normalized_series)
+    #print("Serie norm",phi,normalized_series)
     #print("Angulos",phi)
     #print("valores de PHI de R",phi)
     """
@@ -81,12 +83,28 @@ def varGAF(data, dim,TIME_STEPS):
     elif dim == 'z': 
         k=2
     
-    x=np.array(data[:,k]).reshape(1,-1)
     
-    X_gaf = gramian_angular_field(x)
+    f=data[:,k].reshape(1,TIME_STEPS)
+    
+    gasf = GramianAngularField(method='summation')
+    x_t_gasf = gasf.fit_transform(f)
+     
+    gadf = GramianAngularField(method='difference')
+    x_t_gadf = gadf.fit_transform(f)
+    serie=np.zeros(x_t_gadf.shape)
+    diag=normalize_to_zero_one(f)
+    # Modificar la diagonal directamente
+    print(diag.shape)
+    for i in range(0,TIME_STEPS):
+        serie[0][i][i]=diag[0][i]
+    print(serie)
+    X_t_GAF=np.concatenate((x_t_gasf,x_t_gadf,serie),axis=-1)
+     
+    
+    #X_gaf = gramian_angular_field(x)
     #print(X_gaf)
     
-    return X_gaf
+    return X_t_GAF
 
 def RGBfromMTFMatrix_of_XYZ(X,Y,Z):
     if X.shape != Y.shape or X.shape != Z.shape or Y.shape != Z.shape:
@@ -107,11 +125,11 @@ def RGBfromMTFMatrix_of_XYZ(X,Y,Z):
 
 def SavevarGAF_XYZ(x, sj, item_idx, action=None, normalized=True, path=None, saveImage=True, TIME_STEPS=129):
     if not all([(x==0).all()]):
-     _r = varGAF(x,'x', TIME_STEPS)
-     _g = varGAF(x,'y', TIME_STEPS)
-     _b = varGAF(x,'z', TIME_STEPS)
+     imx = varGAF(x,'x', TIME_STEPS)
+     imy = varGAF(x,'y', TIME_STEPS)
+     imz = varGAF(x,'z', TIME_STEPS)
 
-     print("SOLO _r", _r)
+     print("SOLO _r", imx.shape)
      #print("Y", _g[1][4])
      #print("Z", _b[1][4])
      #print("Y", _g)
@@ -125,77 +143,76 @@ def SavevarGAF_XYZ(x, sj, item_idx, action=None, normalized=True, path=None, sav
      # plt.gca().yaxis.set_major_locator(plt.NullLocator())
 
      #print("fig size: width=", plt.figure().get_figwidth(), "height=", plt.figure().get_figheight())
-    
+     img=np.array([imx,imy,imz])
+     dim=3
+     newImages=[]
      if normalized:
-          
-          newImage = RGBfromMTFMatrix_of_XYZ(normalize_to_zero_one(_r), normalize_to_zero_one(_g),normalize_to_zero_one(_b))
-          #newImage = RGBfromRPMatrix_of_XYZ(_r, _g, _b)
-          # print(newImage.shape)
-          #print(newImage[1][4][0]* 255)
-          
-          newImage = Image.fromarray((np.round(newImage * 255)).astype(np.uint8))
-          # plt.imshow(newImage)
-          
-          if saveImage:
-               # plt.savefig(f"{path}{sj}{action}{item_idx}.png",bbox_inches='tight',pad_inches = 0, dpi='figure')
-               newImage.save(f"{path}{sj}{action}{item_idx}gasf.png")
-          # plt.close('all')
-     else:
-          newImage = RGBfromMTFMatrix_of_XYZ((_r+1)/2, (_g+1)/2,(_b+1)/2)
-          newImage = Image.fromarray((newImage * 255).astype(np.uint8))
-          # plt.imshow(newImage)
-          if saveImage:
-               # plt.savefig(f"{path}{sj}{action}{item_idx}.png",bbox_inches='tight',pad_inches = 0, dpi='figure') #dpi='figure' for preserve the correct pixel size (TIMESTEPS x TIMESTEPS)
-               newImage.save(f"{path}{sj}{action}{item_idx}gasf.png")
-          # plt.close('all')
+            for i in range(0,dim):
+                imagen=img[i]
+                _r=imagen[:,:,:TIME_STEPS].reshape(129,129)
+                _g=imagen[:,:,TIME_STEPS:TIME_STEPS*2].reshape(129,129)
+                _b=imagen[:,:,TIME_STEPS*2:TIME_STEPS*3].reshape(129,129)
+               
+                newImage = RGBfromMTFMatrix_of_XYZ((_r+1)/2, (_g+1)/2,(_b))
+                #newImage = RGBfromRPMatrix_of_XYZ(_r, _g, _b)
+                # print(newImage.shape)
+                #print(newImage[1][4][0]* 255)
+                
+                newImage = Image.fromarray((np.round(newImage * 255)).astype(np.uint8))
+                # plt.imshow(newImage)
+                newImages=np.append(newImages,newImage)
+                if saveImage:
+                    # plt.savefig(f"{path}{sj}{action}{item_idx}.png",bbox_inches='tight',pad_inches = 0, dpi='figure')
+                    newImage.save(f"{path}{sj}{action}{item_idx}gaf{i}.png")
+                # plt.close('all')
+       
     
-     return newImage
+     return newImages
     
     else:
      return None
     
    
-def calcular_errores(valores_verdaderos, valores_aproximados):
-    # Convertir las listas a arrays de numpy para facilitar los cálculos
-    valores_verdaderos = np.array(valores_verdaderos)
-    valores_aproximados = np.array(valores_aproximados)
-    
-    # Calcular el error absoluto
-    errores_absolutos = np.abs(valores_verdaderos - valores_aproximados)
-    
-    # Calcular el error relativo (evitando la división por cero)
-    errores_relativos = np.abs(errores_absolutos / valores_verdaderos)
-    
-    # Calcular el error absoluto promedio
-    error_absoluto_promedio = np.mean(errores_absolutos)
-    
-    # Calcular el error relativo promedio
-    error_relativo_promedio = np.mean(errores_relativos)
-    
-    return error_absoluto_promedio, error_relativo_promedio
+
 def Reconstruct_GAF(img,dictionary,a):
-    _r= img[:,:,0].astype('float')
-    _g= img[:,:,1].astype('float')
-    _b= img[:,:,2].astype('float')
+    _r= img[:,:,0].astype('float') #sumatoria de cosenos
+    _g= img[:,:,1].astype('float') #diff de senos
+    _b= img[:,:,2].astype('float') #canal libre
     
-    _r=np.interp(_r,(0,255),(0,1))
-    _g=np.interp(_g,(0,255),(0,1))
-    _b=np.interp(_b,(0,255),(0,1))
-    
-    r=GAF_to_TS(_r,0,dictionary[a])
-    g=GAF_to_TS(_g,1,dictionary[a])
-    b=GAF_to_TS(_b,2,dictionary[a])
+    _r=np.interp(_r,(0,255),(-1,1))
+    _g=np.interp(_g,(0,255),(-1,1))
+    print("tamaño de b",_b.shape)
+    _b=np.interp(_b,(0,255),(dictionary[a][1][0],dictionary[a][0][0]))
+    #print(_r)
+    #r=GAF_to_TS(_r,_g,0,dictionary[a])
+    #g=GAF_to_TS(_g,1,dictionary[a])
+    b=np.diag(_b)
     N=[]
-    N.append(r)
-    N.append(g)
     N.append(b)
+    #N.append(_g)
+    #N.append(_b)
     return N
-def GAF_to_TS(gaf,i,dictionary,method='summation'):
+def equations(vars, C, S):
+    x_i, x_j = vars
+    x_i=x_j
+    eq1 = x_i * x_i + np.sqrt((1 - x_i**2) * (1 - x_i**2)) - C
+    eq2 = x_i * np.sqrt(1 - x_i**2) - x_i * np.sqrt(1 - x_i**2) - S
+    return [eq1, eq2]
+def GAF_to_TS(_r,_g,i,dictionary,method='summation'):
     #We recontruct first phi vector based on gasf matrix diagonal property
-    phi=np.arccos(np.diag(gaf))/2
+    
+    cose=np.diag(_r)
+    sen=np.diag(_g)
+    X_normalized=[]
+    phi=np.arccos(np.diag(_r))/2
     X_normalized=np.cos(phi)
     
+
     
+
+
+    
+     
     #RECONSTRUCCIÓN DISCRETA DE LOS ESTADOS:
     #Sabemos que el valor medio de los datos maximos es 
     MAX=dictionary[0] 
@@ -205,13 +222,8 @@ def GAF_to_TS(gaf,i,dictionary,method='summation'):
     #x=np.interp(X_normalized,(np.min(X_normalized),np.max(X_normalized)),(MIN[i],MAX[i]))
     x=X_normalized
        
-     
-
-    # Transformar los puntos
-     #posi =min_b + n * (max_b - min_b)
-    x=np.interp(x,(np.min(x),np.max(x)),(MIN[i], MAX[i])) 
-
     return x
+
 def main():
      data_name="WISDM"
      data_folder="/home/adriano/Escritorio/TFG/data/WISDM/"
@@ -230,17 +242,24 @@ def main():
      sj = sj_train[a][0]
      w_y = y_train[a]
      w_y_no_cat = np.argmax(w_y)
-     print(w.shape)
+     f=w[:,0].reshape(1,129)
+     print(f.shape)
+     print(f)
+     time_points = np.linspace(0, 4 * np.pi, 129)
+     x = np.sin(time_points)
+     X = np.array([x])
+     print(X.shape)
      """
-     valoresa=np.linspace(-5, 20, 129)
-     valoresb=np.linspace(-20, 50, 129)
-     valoresc=np.linspace(-10, 3, 129)
-     experimento=np.array([valoresa,valoresb,valoresc]).reshape(129,3)
-     experimentoinv=np.array([valoresa[::-1],valoresb[::-1],valoresc[::-1]]).reshape(129,3)
+     gasf= GramianAngularField(sample_range=(-1,1),method='summation')
+     x_t_gasf=gasf.fit_transform(normalize_series(f))
+     gadf= GramianAngularField(sample_range=(-1,1),method='summation')
+     x_t_gadf=gadf.transform(f)
      
-     img = SavevarGAF_XYZ(experimento, sj, 0, "x", normalized = 1, path=f"./", TIME_STEPS=129) 
-     img2 = SavevarGAF_XYZ(experimentoinv, sj, 1, "x", normalized = 1, path=f"./", TIME_STEPS=129)
      """
+    
+     img = SavevarGAF_XYZ(w, sj, a, "x", normalized = 1, path=f"./", TIME_STEPS=129)
+
+     
      dictionary=dict()
      for k in range(0,8163):
          l=X_train[k]
@@ -248,23 +267,21 @@ def main():
          maximos=[np.max(l[:,0]),np.max(l[:,1]),np.max(l[:,2])]
          minimos=[np.min(l[:,0]),np.min(l[:,1]),np.min(l[:,2])]
          dictionary[k]=[maximos,minimos]
-
-     img = SavevarGAF_XYZ(w, sj, a, "x", normalized = 1, path=f"./", TIME_STEPS=129)
-     imagen = cv2.imread("./1600x0gasf.png")  
+    
+     imagen = cv2.imread("./1600x0gaf0.png")  
      imagen = cv2.cvtColor(imagen, cv2.COLOR_BGR2RGB)
      print("Image shape",imagen.shape)
      
      rp=Reconstruct_GAF(imagen,dictionary,a)
-     # Configurar el estilo de los gráficos
-    
      dim=0
-     
+
+   
     # Configurar el estilo de los gráficos
      plt.style.use("ggplot")  
 
     # Gráfico original
      plt.figure(figsize=(10, 6))
-     plt.plot(w[:, dim], marker='o', color='blue')
+     plt.plot(w[:, dim], marker='', color='blue',cmap="viridis")
      plt.title('Original', fontsize=18,fontweight="bold")
      plt.xlabel("Tiempo", fontsize=12)
      plt.ylabel('Índice X', fontsize=12)
@@ -275,7 +292,7 @@ def main():
 
     # Gráfico reconstrucción
      plt.figure(figsize=(10, 6))
-     plt.plot(rp[dim], marker='o', color='green')
+     plt.plot(rp[dim], marker='', color='magenta')
      plt.title('Reconstrucción', fontsize=18,fontweight="bold")
      plt.xlabel('Tiempo', fontsize=12)
      plt.ylabel('Índice X', fontsize=12)
@@ -286,8 +303,8 @@ def main():
 
     # Gráfico comparativa
      plt.figure(figsize=(10, 6))
-     plt.plot(w[:, dim], marker='o', label='Original', color='blue')
-     plt.plot(rp[dim], marker='o', label='Reconstrucción', color='green')
+     plt.plot(w[:, dim], marker='', label='Original', color='blue')
+     plt.plot(rp[dim],linestyle="--", marker='', label='Reconstrucción', color='magenta')
      plt.title('Comparativa', fontsize=18,fontweight="bold")
      plt.xlabel("Tiempo", fontsize=12)
      plt.ylabel('Índice X', fontsize=12)
@@ -300,10 +317,12 @@ def main():
      f=np.array(w[:,dim])
      f=f[:]
      print(f.shape)
-     error_absoluto, error_relativo = calcular_errores(f, rp[dim])
+     error_absoluto, error_relativo = err.calcular_errores(f, rp[dim])
      #d = dtw.distance_fast(f, rp[1], use_pruning=True)
      print(f"Error Absoluto Promedio: {error_absoluto}")
      print(f"Error Relativo Promedio: {error_relativo}")
+     print(f"Error Estandar Promedio: {err.stderror(f,rp[dim])}")
+     print(f"Error Cuadrático Promedio: {err.rmse(f,rp[dim])}")
      #print(f"Error DTW: {d}")
      print(f"Coeficiente de correlación: {np.corrcoef(f, rp[dim])[0,1]}")
      
